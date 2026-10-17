@@ -82,3 +82,34 @@ Free-text status updates on queue/appointments are plain `.update()`.
 2. Is a doctor's diagnosis final, or is a "provisional" state needed? (Demo: append-only entries.)
 3. Which payment sources/prices should appear? (Demo values are placeholders in `supabase/seed.sql`.)
 4. Can receptionists record vitals at registration, or only nurses? (Demo: both.)
+
+## 7. Added in the second backend pass
+
+### Dashboard views (read with `.from('<view>').select('*')`)
+Re-query a view whenever the underlying table fires a real-time event (views themselves do not stream).
+| View | Dashboard section | Re-query on events from |
+|---|---|---|
+| `dash_summary` (one row of tiles) | header tiles | visits, admissions, appointments, lab_requests, beds |
+| `dash_inpatients` | A. active inpatients: ward, bed, diagnosis, doctor, nurse, admitted_at | admissions, beds |
+| `dash_discharged` | B. completed visits/discharges. `payment_source` / `payment_status` are **null** unless the viewer is billing, receptionist or admin. Includes `feedback_rating` | visits, bills, payments |
+| `dash_waiting` | C. queue with `waiting_minutes` and `appointment_status` | visits |
+| `dash_admissions` | D. all admissions, active and past (`admission_status`) | admissions |
+| `dash_lab` | E. doctor/nurse/lab/admin only. `result` filled only once finalised | lab_requests, lab_results |
+| `dash_appointments_today` | F. today (Lagos time) | appointments |
+| `dash_bed_summary` | G. per ward plus an `All wards` row: total, occupied, available, reserved, maintenance | beds |
+| `drug_stock_status` | H. quantity, `stock_status` (`ok|low|out_of_stock`), nearest_expiry, expiring_soon | stock_batches |
+
+### New functions
+| Function | Who | Behaviour |
+|---|---|---|
+| `search_patients(p_query, p_limit)` | any staff | Matches Patient ID, name (typo-tolerant), phone (spaces/dashes ignored) and date of birth (`YYYY-MM-DD`). Returns `open_visit_status`, `is_admitted`, `next_appointment`, `score`. Needs 2+ characters |
+| `check_in_appointment(p_appointment_id)` | receptionist, nurse, doctor, admins | Creates the queue visit, links it, notifies the doctor. Appointment status then follows the visit automatically (`waiting` -> `in_consultation` -> `completed`) |
+| `report_summary(p_from, p_to, p_department, p_doctor_id, p_visit_type, p_service_id)` | hospital_admin, super_admin | One JSON object: visits, admissions, bed occupancy, appointments (completed/cancelled/no-show), lab workload, pharmacy usage, revenue (billed/paid/outstanding and by source), ANC, `daily_visits` series. Range limited to 366 days |
+| `server_time()` | any | Database clock. Use this, not the browser/PC clock, when computing "today" for seed data or tests |
+
+New booking: when an appointment is inserted with a `doctor_id`, that doctor gets an in-app notification.
+
+### Scripts
+- `node --env-file=.env scripts/reset-demo-data.mjs`: wipes activity, restocks drugs (Paracetamol = 100), frees beds, seeds 12 fake patients across every dashboard state (Michael Nelson is deliberately not seeded). Run before every rehearsal.
+- `node --env-file=.env scripts/e2e-demo-flow.mjs`: 92 end-to-end checks. Run after a reset.
+- `node --env-file=.env scripts/realtime-check.mjs`: 11 live cross-session checks.

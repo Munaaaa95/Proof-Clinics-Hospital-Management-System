@@ -171,7 +171,7 @@ section('8. Discharge, bed release and billing')
 check('nurse cannot discharge', !!(await c.nurse.rpc('discharge_patient', { p_admission_id: adm, p_summary: 'x' })).error)
 must(await c.doctor.rpc('discharge_patient', {
   p_admission_id: adm, p_summary: 'Recovered. Review in 1 week.', p_payment_source: 'hmo',
-  p_follow_up_at: new Date(Date.now() + 7 * 86400000).toISOString(),
+  p_follow_up_at: new Date(Date.now() + 8 * 86400000).toISOString(),
 }), 'discharge')
 check('bed is available again',
   (await c.nurse.from('beds').select('status').eq('id', bedA.id).single()).data.status === 'available')
@@ -199,7 +199,89 @@ check('receptionist cannot read the audit log', ((await c.reception.from('audit_
 check('audit log cannot be altered', !!(await c.admin.from('audit_log').update({ action: 'x' }).eq('patient_id', patientId)).error ||
   (await c.admin.from('audit_log').select('action').eq('patient_id', patientId).eq('action', 'x')).data.length === 0)
 
-section('10. Sessions')
+// Sections 10-13 assume the database was reset first (node --env-file=.env scripts/reset-demo-data.mjs)
+const serverNow = new Date(must(await c.admin.rpc('server_time'), 'server_time')).getTime()   // DB clock, not this PC's
+const lagosDay = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Africa/Lagos' })
+const lagosToday = lagosDay(serverNow)
+const rows = async (q) => { const { data, error } = await q; if (error) throw new Error(error.message); return data ?? [] }
+
+section('10. Dashboard views')
+const sum = (await c.admin.from('dash_summary').select('*').single()).data
+check(`summary tiles (inpatients ${sum?.active_inpatients}, waiting ${sum?.waiting_patients})`, sum && sum.active_inpatients >= 3 && sum.waiting_patients >= 3)
+check('A. inpatients show ward, bed and doctor', (await rows(c.nurse.from('dash_inpatients').select('*')))
+  .some((r) => r.patient_name === 'Chinedu Okeke' && r.ward === 'Male Ward' && r.bed_number === 'B1' && r.doctor_name.startsWith('Dr.')))
+const dis = await rows(c.doctor.from('dash_discharged').select('*').eq('patient_name', 'Samuel Johnson'))
+check('B. discharged list hides payment info from doctors', dis.length === 1 && dis[0].payment_status === null && dis[0].payment_source === null)
+const disB = await rows(c.billing.from('dash_discharged').select('*').eq('patient_name', 'Samuel Johnson'))
+check('B. billing sees payment source and status', disB[0]?.payment_status === 'partial' && disB[0]?.payment_source === 'hmo')
+check('B. patient feedback rating shown', disB[0]?.feedback_rating === 'great')
+const wait = await rows(c.doctor.from('dash_waiting').select('*').eq('patient_name', 'Aisha Bello'))
+check('C. waiting list shows complaint and waiting time', wait.length === 1 && wait[0].complaint.includes('Cough') && wait[0].waiting_minutes >= 0)
+check('D. admissions list includes active and past', (await rows(c.admin.from('dash_admissions').select('admission_status'))).some((r) => r.admission_status === 'discharged')
+  && (await rows(c.admin.from('dash_admissions').select('admission_status'))).some((r) => r.admission_status === 'active'))
+const dl = await rows(c.doctor.from('dash_lab').select('*').in('patient_name', ['Chinedu Okeke', 'Funke Adebayo']))
+check('E. lab shows a finalised result, hides an unfinalised one',
+  dl.find((r) => r.patient_name === 'Chinedu Okeke')?.result?.includes('falciparum') && dl.find((r) => r.patient_name === 'Funke Adebayo')?.result === null)
+check('E. receptionist cannot see lab dashboard', (await rows(c.reception.from('dash_lab').select('*'))).length === 0)
+check('F. appointments today listed', (await rows(c.reception.from('dash_appointments_today').select('*'))).length >= 5)
+const bedSummary = await rows(c.reception.from('dash_bed_summary').select('*'))
+const all = bedSummary.find((b) => b.ward === 'All wards')
+check(`G. bed totals add up (${all?.occupied} occupied of ${all?.total_beds})`,
+  all && all.total_beds === 18 && all.occupied >= 3 && all.occupied + all.available + all.reserved + all.maintenance === all.total_beds)
+const anonClient = createClient(url, anon, { auth: { persistSession: false } })
+const anonRead = await anonClient.from('dash_summary').select('*')
+check('signed-out visitors get nothing from the dashboard', !!anonRead.error || (anonRead.data ?? []).length === 0)
+
+section('11. Patient search')
+const s1 = await rows(c.reception.rpc('search_patients', { p_query: 'Chinedu' }))
+check('search by name', s1[0]?.full_name === 'Chinedu Okeke' && s1[0].is_admitted === true)
+check('search by Patient ID', (await rows(c.reception.rpc('search_patients', { p_query: s1[0].patient_code })))[0]?.full_name === 'Chinedu Okeke')
+const s3 = await rows(c.reception.rpc('search_patients', { p_query: '0803 123 0004' }))
+check('search by phone (spaces ignored); shows open visit', s3[0]?.full_name === 'Aisha Bello' && s3[0].open_visit_status === 'waiting')
+check('search by date of birth', (await rows(c.reception.rpc('search_patients', { p_query: '1990-07-22' })))[0]?.full_name === 'Funke Adebayo')
+check('search tolerates a misspelling', (await rows(c.reception.rpc('search_patients', { p_query: 'Chinedu Okekeh' })))[0]?.full_name === 'Chinedu Okeke')
+check('one-letter search returns nothing', (await rows(c.reception.rpc('search_patients', { p_query: 'a' }))).length === 0)
+check('signed-out visitors cannot search', !!(await anonClient.rpc('search_patients', { p_query: 'Chinedu' })).error)
+
+section('12. Appointments')
+const kunleAppt = (await rows(c.reception.from('dash_appointments_today').select('appointment_id').eq('patient_name', 'Kunle Martins')))[0]
+const kv = must(await c.reception.rpc('check_in_appointment', { p_appointment_id: kunleAppt.appointment_id }), 'check_in_appointment')
+check('checking in an appointment puts the patient in the queue',
+  (await rows(c.doctor.from('dash_waiting').select('*').eq('patient_name', 'Kunle Martins'))).length === 1)
+check('appointment status follows the visit (waiting)',
+  (await rows(c.reception.from('dash_appointments_today').select('appointment_status').eq('patient_name', 'Kunle Martins')))[0].appointment_status === 'waiting')
+check('same appointment cannot be checked in twice', !!(await c.reception.rpc('check_in_appointment', { p_appointment_id: kunleAppt.appointment_id })).error)
+must(await c.doctor.rpc('start_consultation', { p_visit_id: kv }), 'start')
+check('appointment follows the visit (in consultation)',
+  (await rows(c.reception.from('dash_appointments_today').select('appointment_status').eq('patient_name', 'Kunle Martins')))[0].appointment_status === 'in_consultation')
+must(await c.doctor.rpc('complete_visit', { p_visit_id: kv, p_disposition: 'home' }), 'complete')
+check('appointment follows the visit (completed)',
+  (await rows(c.reception.from('dash_appointments_today').select('appointment_status').eq('patient_name', 'Kunle Martins')))[0].appointment_status === 'completed')
+const kunleId = (await rows(c.reception.from('dash_appointments_today').select('patient_id').eq('patient_name', 'Kunle Martins')))[0].patient_id
+must(await c.reception.from('appointments').insert({
+  patient_id: kunleId, doctor_id: c.doctor.uid, appt_type: 'follow_up', reason: 'E2E review', scheduled_at: new Date(serverNow + 86400e3 * 3).toISOString(),
+}), 'book')
+check('doctor is notified of a new appointment',
+  (await rows(c.doctor.from('notifications').select('title').eq('patient_id', kunleId))).some((n) => n.title === 'New appointment'))
+
+section('13. Reports')
+const from = lagosDay(serverNow - 7 * 86400e3)
+const rep = must(await c.admin.rpc('report_summary', { p_from: from, p_to: lagosToday }), 'report')
+check(`visits counted (${rep.visits.total})`, rep.visits.total >= 10 && rep.visits.unique_patients >= 10)
+check('admissions and bed occupancy', rep.admissions.active_now >= 3 && rep.beds.total === 18 && rep.beds.occupancy_percent > 0)
+check('revenue billed/paid/outstanding add up', Number(rep.revenue.billed) > 0 &&
+  Number(rep.revenue.billed) - Number(rep.revenue.paid) === Number(rep.revenue.outstanding))
+check('lab workload and pharmacy usage present', rep.lab_workload.length > 0 && rep.pharmacy_usage.length > 0)
+check('daily series covers every day in range', rep.daily_visits.length === 8)
+const repAdm = must(await c.admin.rpc('report_summary', { p_from: from, p_to: lagosToday, p_visit_type: 'admission' }), 'report filtered')
+check('visit-type filter works', repAdm.visits.outpatient === 0 && repAdm.visits.inpatient_or_admission >= 6)
+const repDoc = must(await c.admin.rpc('report_summary', { p_from: from, p_to: lagosToday, p_doctor_id: c.doctor.uid }), 'report doctor')
+check('doctor filter narrows results', repDoc.visits.total > 0 && repDoc.visits.total < rep.visits.total)
+check('receptionist cannot run reports', !!(await c.reception.rpc('report_summary', { p_from: from, p_to: lagosToday })).error)
+check('billing officer cannot run reports', !!(await c.billing.rpc('report_summary', { p_from: from, p_to: lagosToday })).error)
+check('backwards date range rejected', !!(await c.admin.rpc('report_summary', { p_from: lagosToday, p_to: from })).error)
+
+section('14. Sessions')
 for (const k of Object.keys(c)) await c[k].rpc('record_logout')
 check('logout recorded', ((await c.admin.from('staff_sessions').select('id').eq('staff_id', c.admin.uid).not('logout_at', 'is', null)).data ?? []).length > 0)
 
