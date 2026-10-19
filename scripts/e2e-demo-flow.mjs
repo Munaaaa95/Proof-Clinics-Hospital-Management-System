@@ -281,7 +281,95 @@ check('receptionist cannot run reports', !!(await c.reception.rpc('report_summar
 check('billing officer cannot run reports', !!(await c.billing.rpc('report_summary', { p_from: from, p_to: lagosToday })).error)
 check('backwards date range rejected', !!(await c.admin.rpc('report_summary', { p_from: lagosToday, p_to: from })).error)
 
-section('14. Sessions')
+section('14. Antenatal care (record_anc_visit, anc_summary)')
+const mum = must(await c.reception.rpc('register_patient', {
+  p_full_name: `Anc Test${stamp}`, p_dob: '1996-03-03', p_sex: 'female', p_phone: null, p_address: 'Lagos',
+  p_kin_name: 'B', p_kin_phone: '0803', p_kin_relationship: 'spouse', p_kin_relationship_other: null, p_force: false,
+}), 'register mother')
+const ancCall = (client, extra) => client.rpc('record_anc_visit', { p_patient_id: mum.patient_id, ...extra })
+const lmp = lagosDay(serverNow - 140 * 86400e3)
+const edd = new Date(Date.parse(lmp) + 280 * 86400e3).toISOString().slice(0, 10)
+check('receptionist cannot record antenatal care', !!(await ancCall(c.reception, { p_lmp: lmp })).error)
+check('pharmacist cannot record antenatal care', !!(await ancCall(c.pharmacy, { p_lmp: lmp })).error)
+check('male patient rejected', !!(await c.nurse.rpc('record_anc_visit', { p_patient_id: patientId, p_lmp: lmp })).error)
+check('first visit needs the LMP', !!(await ancCall(c.nurse, {})).error)
+check('LMP in the future rejected', !!(await ancCall(c.nurse, { p_lmp: lagosDay(serverNow + 5 * 86400e3) })).error)
+check('systolic must exceed diastolic', !!(await ancCall(c.nurse, { p_lmp: lmp, p_bp_systolic: 70, p_bp_diastolic: 120 })).error)
+check('one blood pressure value alone rejected', !!(await ancCall(c.nurse, { p_lmp: lmp, p_bp_systolic: 120 })).error)
+check('parity must be lower than gravida', !!(await ancCall(c.nurse, { p_lmp: lmp, p_gravida: 2, p_parity: 2 })).error)
+const anc1 = must(await ancCall(c.nurse, {
+  p_lmp: lmp, p_gravida: 2, p_parity: 1, p_bp_systolic: 112, p_bp_diastolic: 72, p_weight_kg: 64,
+  p_fundal_height_cm: 20, p_findings: 'Normal growth', p_supplements: 'Folic acid, Iron',
+}), 'first ANC visit')
+check('first visit opens the record and calculates the EDD', anc1.record_created === true && anc1.edd === edd, JSON.stringify(anc1))
+check('gestational weeks calculated from the LMP', anc1.gestational_weeks === 20, JSON.stringify(anc1))
+check('follow-up must be after the visit', !!(await ancCall(c.nurse, { p_follow_up_date: lagosToday })).error)
+check('visit before the LMP rejected', !!(await ancCall(c.nurse, { p_visit_date: lagosDay(serverNow - 200 * 86400e3) })).error)
+const tomorrow = lagosDay(serverNow + 86400e3)
+const anc2 = must(await ancCall(c.doctor, { p_findings: 'Well', p_follow_up_date: tomorrow }), 'second ANC visit')
+check('second visit reuses the same record', anc2.record_created === false && anc2.anc_record_id === anc1.anc_record_id)
+const sumRow = (await rows(c.nurse.from('anc_summary').select('*').eq('patient_id', mum.patient_id)))[0]
+check('anc_summary shows visits, weeks and next follow-up',
+  sumRow?.visit_count === 2 && sumRow.weeks_now === 20 && sumRow.next_follow_up === tomorrow && sumRow.follow_up_overdue === false && sumRow.edd === edd,
+  JSON.stringify(sumRow))
+check('anc_summary lists the seeded mother (Ngozi Umeh)', (await rows(c.doctor.from('anc_summary').select('full_name,visit_count'))).some((r) => r.full_name === 'Ngozi Umeh' && r.visit_count === 2))
+check('receptionist sees no antenatal summary', (await rows(c.reception.from('anc_summary').select('*'))).length === 0)
+check('pharmacist sees no antenatal records', (await rows(c.pharmacy.from('anc_records').select('id'))).length === 0)
+const ancAudit = (await c.admin.from('audit_log').select('table_name').eq('patient_id', mum.patient_id)).data ?? []
+check('antenatal writes are audited', ancAudit.some((a) => a.table_name === 'anc_records') && ancAudit.some((a) => a.table_name === 'anc_visits'))
+
+section('15. Reminder scheduler')
+check('receptionist cannot run the scheduler', !!(await c.reception.rpc('run_reminders')).error)
+check('nurse cannot run the scheduler', !!(await c.nurse.rpc('run_reminders')).error)
+check('signed-out visitors cannot run the scheduler', !!(await anonClient.rpc('run_reminders')).error)
+const bookAppt = (extra) => c.reception.from('appointments').insert({
+  patient_id: mum.patient_id, doctor_id: c.doctor.uid, appt_type: 'antenatal', department: 'Antenatal', ...extra,
+}).select('id').single()
+const apptSoon = must(await bookAppt({ scheduled_at: new Date(serverNow + 3 * 3600e3).toISOString(), reason: 'Reminder test' }), 'book soon')
+const apptCancelled = must(await bookAppt({ scheduled_at: new Date(serverNow + 2 * 3600e3).toISOString(), reason: 'Reminder test cancelled', status: 'cancelled' }), 'book cancelled')
+const run1 = must(await c.admin.rpc('run_reminders'), 'run_reminders')
+check(`scheduler reports what it sent (${JSON.stringify(run1)})`, run1.appointments >= 1 && run1.anc_follow_ups >= 1)
+const mumReminders = await rows(c.doctor.from('reminders').select('kind,appointment_id,anc_visit_id,message').eq('patient_id', mum.patient_id))
+check('appointment within 24h gets one reminder', mumReminders.filter((r) => r.appointment_id === apptSoon.id).length === 1)
+check('cancelled appointment gets none', !mumReminders.some((r) => r.appointment_id === apptCancelled.id))
+check('appointment more than 24h away gets none', (await rows(c.doctor.from('reminders').select('id').eq('patient_id', kunleId))).length === 0)
+check('ANC follow-up tomorrow gets a reminder naming the date',
+  mumReminders.filter((r) => r.kind === 'anc_follow_up').length === 1 &&
+  mumReminders.find((r) => r.kind === 'anc_follow_up').message.includes(`Anc Test${stamp}`))
+check('doctor was notified of the upcoming appointment',
+  (await rows(c.doctor.from('notifications').select('title').eq('patient_id', mum.patient_id))).some((n) => n.title === 'Upcoming appointment'))
+check('the clinician who set the follow-up was notified',
+  (await rows(c.doctor.from('notifications').select('title').eq('patient_id', mum.patient_id))).some((n) => n.title === 'Antenatal follow-up tomorrow'))
+check('other staff were not notified of it',
+  !(await rows(c.nurse.from('notifications').select('title').eq('patient_id', mum.patient_id))).some((n) => n.title === 'Antenatal follow-up tomorrow'))
+const run2 = must(await c.admin.rpc('run_reminders'), 'run_reminders again')
+check('running again repeats nothing', run2.appointments === 0 && run2.anc_follow_ups === 0, JSON.stringify(run2))
+check('pharmacist cannot read the reminder log', (await rows(c.pharmacy.from('reminders').select('id'))).length === 0)
+check('reminders cannot be edited through the API',
+  !!(await c.admin.from('reminders').update({ message: 'x' }).eq('patient_id', mum.patient_id)).error ||
+  (await rows(c.admin.from('reminders').select('message').eq('patient_id', mum.patient_id).eq('message', 'x'))).length === 0)
+
+// Medication reminders depend on the time of day, so these use the service role to set the scheduler's clock.
+if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  const svc = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
+  const disp = must(await svc.from('dispensing').select('dispensed_at').eq('prescription_id', rx.id).limit(1).single(), 'dispensing')
+  const dayAfter = lagosDay(Date.parse(disp.dispensed_at) + 86400e3)
+  const at = (day, hhmm) => new Date(`${day}T${hhmm}:00+01:00`).toISOString()
+  const runAt = async (iso) => must(await svc.rpc('run_reminders', { p_now: iso }), 'run_reminders at ' + iso)
+  const rxReminders = async () => rows(svc.from('reminders').select('due_at,message').eq('prescription_id', rx.id))
+  check('inpatient prescriptions are not reminded', (await rows(svc.from('reminders').select('id').eq('prescription_id', rx2.id))).length === 0)
+  await runAt(at(dayAfter, '08:05'))
+  const medRows = await rxReminders()
+  check('home prescription (TDS) gets the 08:00 dose reminder', medRows.length === 1 && medRows[0].message.includes('Paracetamol 500mg') && medRows[0].message.includes('TDS'), JSON.stringify(medRows))
+  check('same dose is not reminded twice', (await runAt(at(dayAfter, '08:05'))).medication === 0 && (await rxReminders()).length === 1)
+  check('a dose missed by more than 2 hours is skipped', (await runAt(at(dayAfter, '11:05'))).medication === 0)
+  await runAt(at(lagosDay(Date.parse(at(dayAfter, '08:05')) + 4 * 86400e3), '20:05'))
+  check('no reminders after the course has ended', (await rxReminders()).length === 1)
+} else {
+  console.log('  SKIP  medication reminder checks (SUPABASE_SERVICE_ROLE_KEY not set)')
+}
+
+section('16. Sessions')
 for (const k of Object.keys(c)) await c[k].rpc('record_logout')
 check('logout recorded', ((await c.admin.from('staff_sessions').select('id').eq('staff_id', c.admin.uid).not('logout_at', 'is', null)).data ?? []).length > 0)
 
