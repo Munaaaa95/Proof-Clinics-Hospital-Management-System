@@ -142,3 +142,6 @@ Demo delivery is the `reminders` table (a log, `channel = 'log'`) plus in-app no
 pg_cron runs it every 5 minutes when the extension exists. Otherwise: `node --env-file=.env scripts/run-reminders.mjs --loop` (or without `--loop` for one run before a rehearsal).
 
 `scripts/e2e-demo-flow.mjs` now has sections 14 (ANC) and 15 (reminders). The medication checks need `SUPABASE_SERVICE_ROLE_KEY` in `.env` and are skipped without it.
+
+### Concurrent dispensing
+`node --env-file=.env scripts/concurrency-dispense.mjs` (22 checks) fires real parallel `dispense_prescription` calls from separate pharmacist sessions: the same prescription dispensed by three at once, two prescriptions competing for stock that covers one, a fill split across two batches, and six prescriptions against 20 tablets. It uses its own test drug, so the Paracetamol 100 -> 90 demo number is untouched. Run `reset-demo-data.mjs` first. It was checked by temporarily removing the row locks: three simultaneous dispenses of one prescription then took stock from 100 to 70, so the test does detect the race it guards against.
