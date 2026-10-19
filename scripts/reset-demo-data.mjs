@@ -30,7 +30,7 @@ const one = (role, n = 0) => {
   if (!r) throw new Error(`No staff with role ${role}. Run scripts/create-demo-users.mjs first.`)
   return r.id
 }
-const doctor = one('doctor', 0), doctor2 = one('doctor', 1), nurse = one('nurse'), lab = one('lab_scientist'), billing = one('billing_officer')
+const doctor = one('doctor', 0), doctor2 = one('doctor', 1), nurse = one('nurse'), lab = one('lab_scientist'), billing = one('billing_officer'), pharmacist = one('pharmacist')
 const services = Object.fromEntries(ok(await db.from('services').select('*'), 'services').map((s) => [s.name, s]))
 const drugs = Object.fromEntries(ok(await db.from('drugs').select('*'), 'drugs').map((d) => [d.name, d]))
 const bedRows = ok(await db.from('beds').select('id, bed_number, ward:wards(name, daily_rate)'), 'beds')
@@ -157,6 +157,42 @@ for (const [k, plan] of [['bisi', null], ['kunle', 'Review in 2 weeks']]) {
   await ins('payments', [{ bill_id: bill.id, patient_id: P[k], amount: fee.price, source: 'patient', reference: `RCPT-${k.toUpperCase()}`, recorded_by: billing }])
 }
 
+// ---- home medication: Bisi was dispensed a 5-day course yesterday, so the reminder log has entries to show.
+// (Amoxicillin, not Paracetamol, so the 100 -> 90 demo number is untouched.) Doses that already passed today are
+// logged here; the scheduler (run_reminders) adds the later ones as their time comes and never repeats these.
+{
+  const bisiVisit = ok(await db.from('visits').select('id').eq('patient_id', P.bisi).single(), 'bisi visit')
+  const amox = drugs['Amoxicillin 500mg']
+  const [rx] = await ins('prescriptions', [{
+    patient_id: P.bisi, visit_id: bisiVisit.id, drug_id: amox.id, dose: '500mg', route: 'oral', frequency: 'TDS',
+    duration_days: 5, quantity: 15, status: 'dispensed', prescribed_by: doctor, prescribed_at: ago(27),
+  }])
+  const batch = ok(await db.from('stock_batches').select('id, quantity').eq('drug_id', amox.id).single(), 'amoxicillin batch')
+  ok(await db.from('stock_batches').update({ quantity: batch.quantity - 15 }).eq('id', batch.id), 'take stock')
+  const dispensedAt = ago(26)
+  await ins('dispensing', [{ prescription_id: rx.id, patient_id: P.bisi, drug_id: amox.id, batch_id: batch.id, quantity: 15, dispensed_by: pharmacist, dispensed_at: dispensedAt }])
+  await ins('stock_movements', [{ drug_id: amox.id, batch_id: batch.id, change: -15, reason: 'dispensed', reference: rx.id, created_by: pharmacist }])
+  const bisiBill = ok(await db.from('bills').select('id').eq('visit_id', bisiVisit.id).single(), 'bisi bill')
+  const drugCharge = 15 * amox.unit_price
+  await ins('bill_items', [{ bill_id: bisiBill.id, patient_id: P.bisi, category: 'pharmacy', description: 'Amoxicillin 500mg x15', quantity: 15, unit_price: amox.unit_price }])
+  if (drugCharge > 0) await ins('payments', [{ bill_id: bisiBill.id, patient_id: P.bisi, amount: drugCharge, source: 'patient', reference: 'RCPT-BISI-RX', recorded_by: billing }])
+
+  // Same dose times and wording as run_reminders() uses for TDS, so its unique key skips these later.
+  const start = new Date(dispensedAt).getTime(), end = start + 5 * 86400e3
+  const logRows = []
+  for (let d = -2; d <= 0; d++) {
+    const day = new Date(serverNow + d * 86400e3).toLocaleDateString('en-CA', { timeZone: 'Africa/Lagos' })
+    for (const hhmm of ['08:00', '14:00', '20:00']) {
+      const due = new Date(`${day}T${hhmm}:00+01:00`).getTime()
+      if (due > start && due <= end && due <= serverNow) {
+        logRows.push({ kind: 'medication', patient_id: P.bisi, prescription_id: rx.id, due_at: new Date(due).toISOString(),
+          message: 'Dear Bisi Adewale, time to take Amoxicillin 500mg (500mg, oral). Prescribed: TDS.', sent_at: new Date(due).toISOString() })
+      }
+    }
+  }
+  if (logRows.length) await ins('reminders', logRows)
+}
+
 // ---- appointments: a mix of today (various statuses) and the coming days
 await ins('appointments', [
   { patient_id: P.ngozi, doctor_id: doctor2, department: 'Antenatal', appt_type: 'antenatal', scheduled_at: todayAt('10:00'), reason: 'ANC follow-up', status: 'confirmed' },
@@ -177,4 +213,4 @@ await ins('anc_visits', [
 
 // ---- clean slate for audit/notifications so the demo log starts empty
 ok(await db.rpc('clear_activity_logs'), 'clear_activity_logs')
-console.log('Done. Seeded 12 fake patients: 3 inpatients, 3 waiting, 3 discharged, 2 completed outpatients, 1 ANC; Paracetamol stock = 100.')
+console.log('Done. Seeded 12 fake patients: 3 inpatients, 3 waiting, 3 discharged, 2 completed outpatients, 1 ANC, 1 home prescription with medication reminders; Paracetamol stock = 100.')

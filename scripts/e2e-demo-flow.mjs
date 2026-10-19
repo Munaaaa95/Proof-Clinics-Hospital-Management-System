@@ -344,7 +344,10 @@ check('other staff were not notified of it',
   !(await rows(c.nurse.from('notifications').select('title').eq('patient_id', mum.patient_id))).some((n) => n.title === 'Antenatal follow-up tomorrow'))
 const run2 = must(await c.admin.rpc('run_reminders'), 'run_reminders again')
 check('running again repeats nothing', run2.appointments === 0 && run2.anc_follow_ups === 0, JSON.stringify(run2))
-check('pharmacist cannot read the reminder log', (await rows(c.pharmacy.from('reminders').select('id'))).length === 0)
+const seededMeds = await rows(c.nurse.from('reminders').select('due_at,message').eq('kind', 'medication').ilike('message', '%Amoxicillin%'))
+check(`reset data includes a home prescription with logged reminders (${seededMeds.length})`,
+  seededMeds.length >= 1 && new Set(seededMeds.map((m) => m.due_at)).size === seededMeds.length)
+check('pharmacist cannot read the reminder log',(await rows(c.pharmacy.from('reminders').select('id'))).length === 0)
 check('reminders cannot be edited through the API',
   !!(await c.admin.from('reminders').update({ message: 'x' }).eq('patient_id', mum.patient_id)).error ||
   (await rows(c.admin.from('reminders').select('message').eq('patient_id', mum.patient_id).eq('message', 'x'))).length === 0)
