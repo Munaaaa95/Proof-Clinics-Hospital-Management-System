@@ -66,7 +66,7 @@ Views: `bill_summary` (total_billed, total_paid, balance, payment_status), `drug
 | `finalize_lab_result(p_request_id)` | lab | result becomes visible to doctor/nurse; **requesting doctor notified** |
 | `dispense_prescription(p_prescription_id)` | pharmacist | stock down (earliest expiry first), bill item added, low-stock alert if at/below minimum. Fails whole if stock is short |
 | `receive_stock(p_drug_id, p_batch_number, p_expiry, p_quantity, p_supplier)` | pharmacist, admins | new batch |
-| `generate_expiry_alerts(p_days)` | any authenticated (demo) | notifies admins of batches expiring soon |
+| `generate_expiry_alerts(p_days)` | hospital_admin, super_admin, pharmacist (and pg_cron) | Runs daily at 06:00 Lagos via pg_cron. Notifies admins and pharmacists once per batch when it comes within `p_days` (default 90) of expiry, and once more if it expires with stock left. Returns the number of NEW alerts, so running it again returns 0 |
 | `admit_patient(p_visit_id, p_bed_id, p_diagnosis, p_nurse_id)` | doctor, admins | admission id; bed -> occupied; nurses notified. Fails if bed taken |
 | `record_medication(p_mar_id, p_status, p_notes)` | nurse | given/missed/refused/held with server-side user + time; note required unless given |
 | `discharge_patient(p_admission_id, p_summary, p_payment_source, p_follow_up_at)` | doctor, admins | admission discharged, **bed released**, bed charge billed, optional follow-up appointment, billing notified |
@@ -145,3 +145,6 @@ pg_cron runs it every 5 minutes when the extension exists. Otherwise: `node --en
 
 ### Concurrent dispensing
 `node --env-file=.env scripts/concurrency-dispense.mjs` (22 checks) fires real parallel `dispense_prescription` calls from separate pharmacist sessions: the same prescription dispensed by three at once, two prescriptions competing for stock that covers one, a fill split across two batches, and six prescriptions against 20 tablets. It uses its own test drug, so the Paracetamol 100 -> 90 demo number is untouched. Run `reset-demo-data.mjs` first. It was checked by temporarily removing the row locks: three simultaneous dispenses of one prescription then took stock from 100 to 70, so the test does detect the race it guards against.
+
+### Automatic expiry alerts (spec 14)
+`generate_expiry_alerts()` is scheduled daily (pg_cron job `expiry-alerts`). `expiry_alerts_sent` remembers which batch was reported at which stage (`approaching` / `expired`), so scheduling it never repeats a notice. Notification types: `expiry`, titled "Drug approaching expiry" or "Drug batch expired". Expired batches are already excluded from `drug_stock_status.quantity` and from dispensing. e2e section 16 covers it; the expired-batch checks need `SUPABASE_SERVICE_ROLE_KEY`.

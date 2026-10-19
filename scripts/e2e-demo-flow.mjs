@@ -369,7 +369,32 @@ if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
   console.log('  SKIP  medication reminder checks (SUPABASE_SERVICE_ROLE_KEY not set)')
 }
 
-section('16. Sessions')
+section('16. Expiry alerts')
+check('receptionist cannot run expiry alerts', !!(await c.reception.rpc('generate_expiry_alerts')).error)
+check('nurse cannot run expiry alerts', !!(await c.nurse.rpc('generate_expiry_alerts')).error)
+check('signed-out visitors cannot run expiry alerts', !!(await anonClient.rpc('generate_expiry_alerts')).error)
+const expiry1 = must(await c.pharmacy.rpc('generate_expiry_alerts'), 'expiry alerts')
+check(`batch expiring within 90 days is reported (${expiry1} new)`, expiry1 >= 1)
+check('pharmacist and admin were notified',
+  (await rows(c.pharmacy.from('notifications').select('title,body').eq('type', 'expiry'))).some((n) => n.title === 'Drug approaching expiry' && n.body.includes('ORS')) &&
+  (await rows(c.admin.from('notifications').select('title').eq('type', 'expiry'))).some((n) => n.title === 'Drug approaching expiry'))
+check('doctor is not notified of expiry', (await rows(c.doctor.from('notifications').select('id').eq('type', 'expiry'))).length === 0)
+check('running again repeats nothing (safe to schedule daily)', (await c.admin.rpc('generate_expiry_alerts')).data === 0)
+if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  const svc2 = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
+  const ibu = must(await svc2.from('drugs').select('id').eq('name', 'Ibuprofen 400mg').single(), 'ibuprofen')
+  must(await svc2.from('stock_batches').insert({ drug_id: ibu.id, batch_number: 'OLD-1', expiry_date: lagosDay(serverNow - 3 * 86400e3), quantity: 5 }), 'expired batch')
+  check('a batch that expires with stock left is reported once more', (await c.admin.rpc('generate_expiry_alerts')).data === 1)
+  check('...and only once', (await c.admin.rpc('generate_expiry_alerts')).data === 0)
+  check('expired batch notice says so',
+    (await rows(c.admin.from('notifications').select('title,body').eq('type', 'expiry'))).some((n) => n.title === 'Drug batch expired' && n.body.includes('OLD-1')))
+  check('an expired batch is not counted as usable stock',
+    (await rows(c.pharmacy.from('drug_stock_status').select('quantity').eq('drug_id', ibu.id)))[0].quantity === 150)
+} else {
+  console.log('  SKIP  expired-batch checks (SUPABASE_SERVICE_ROLE_KEY not set)')
+}
+
+section('17. Sessions')
 for (const k of Object.keys(c)) await c[k].rpc('record_logout')
 check('logout recorded', ((await c.admin.from('staff_sessions').select('id').eq('staff_id', c.admin.uid).not('logout_at', 'is', null)).data ?? []).length > 0)
 
