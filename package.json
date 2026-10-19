@@ -1,0 +1,27 @@
+{
+  "name": "proof-clinics-hospital-management-system",
+  "version": "1.0.0",
+  "description": "Student demo of a hospital management system.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Munaaaa95/Proof-Clinics-Hospital-Management-System.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Munaaaa95/Proof-Clinics-Hospital-Management-System/issues"
+  },
+  "homepage": "https://github.com/Munaaaa95/Proof-Clinics-Hospital-Management-System#readme",
+  "devDependencies": {
+    "supabase": "^2.121.0"
+  }
+}

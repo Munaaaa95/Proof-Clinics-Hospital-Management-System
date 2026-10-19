@@ -66,7 +66,7 @@ Views: `bill_summary` (total_billed, total_paid, balance, payment_status), `drug
 | `finalize_lab_result(p_request_id)` | lab | result becomes visible to doctor/nurse; **requesting doctor notified** |
 | `dispense_prescription(p_prescription_id)` | pharmacist | stock down (earliest expiry first), bill item added, low-stock alert if at/below minimum. Fails whole if stock is short |
 | `receive_stock(p_drug_id, p_batch_number, p_expiry, p_quantity, p_supplier)` | pharmacist, admins | new batch |
-| `generate_expiry_alerts(p_days)` | any authenticated (demo) | notifies admins of batches expiring soon |
+| `generate_expiry_alerts(p_days)` | hospital_admin, super_admin, pharmacist (and pg_cron) | Runs daily at 06:00 Lagos via pg_cron. Notifies admins and pharmacists once per batch when it comes within `p_days` (default 90) of expiry, and once more if it expires with stock left. Returns the number of NEW alerts, so running it again returns 0 |
 | `admit_patient(p_visit_id, p_bed_id, p_diagnosis, p_nurse_id)` | doctor, admins | admission id; bed -> occupied; nurses notified. Fails if bed taken |
 | `record_medication(p_mar_id, p_status, p_notes)` | nurse | given/missed/refused/held with server-side user + time; note required unless given |
 | `discharge_patient(p_admission_id, p_summary, p_payment_source, p_follow_up_at)` | doctor, admins | admission discharged, **bed released**, bed charge billed, optional follow-up appointment, billing notified |
@@ -113,3 +113,38 @@ New booking: when an appointment is inserted with a `doctor_id`, that doctor get
 - `node --env-file=.env scripts/reset-demo-data.mjs`: wipes activity, restocks drugs (Paracetamol = 100), frees beds, seeds 12 fake patients across every dashboard state (Michael Nelson is deliberately not seeded). Run before every rehearsal.
 - `node --env-file=.env scripts/e2e-demo-flow.mjs`: 92 end-to-end checks. Run after a reset.
 - `node --env-file=.env scripts/realtime-check.mjs`: 11 live cross-session checks.
+
+## 8. Added in the third backend pass (ANC wrapper and reminder scheduler)
+
+### Antenatal care (spec 15), the pattern for the specialty modules
+| Function / view | Who | Behaviour |
+|---|---|---|
+| `record_anc_visit(p_patient_id, p_visit_date, p_lmp, p_gravida, p_parity, p_risk_factors, p_gestational_weeks, p_complaints, p_bp_systolic, p_bp_diastolic, p_weight_kg, p_fundal_height_cm, p_findings, p_investigations, p_supplements, p_follow_up_date)` | doctor, nurse, community_health | Only `p_patient_id` is required. **First visit** opens the mother's ANC record and needs `p_lmp`; the EDD is calculated (LMP + 280 days). **Later visits** add to the same record; send `p_lmp`, `p_gravida`, `p_parity` or `p_risk_factors` only to correct them. Weeks are calculated from the LMP unless `p_gestational_weeks` is sent. Returns `{anc_record_id, anc_visit_id, record_created, edd, gestational_weeks}`. |
+| `anc_summary` | same roles (admins read) | One row per mother: LMP, EDD, `weeks_now`, `days_to_edd`, gravida/parity, `visit_count`, latest visit (BP, weight, fundal height, findings), `next_follow_up`, `follow_up_overdue`. Re-query on events from `anc_visits` / `anc_records`. |
+
+Rejected with a readable message: male patients, a visit date in the future or before the LMP, an LMP more than 300 days before the visit, a follow-up on or before the visit date, only one of the two BP values, systolic not above diastolic, parity not lower than gravida, weeks outside 0-45. The whole call is atomic, so a failed first visit leaves no half-created record. `anc_records` / `anc_visits` stay readable and writable directly, but use the function so these checks run.
+
+### Reminder scheduler (spec 12, 25)
+Demo delivery is the `reminders` table (a log, `channel = 'log'`) plus in-app notifications to staff. No SMS or WhatsApp. Only instructions a clinician already recorded are used.
+
+`reminders`(id, kind `appointment|medication|anc_follow_up`, patient_id, appointment_id, prescription_id, anc_visit_id, due_at, message, channel, sent_at). Read-only through the API for receptionist, doctor, nurse, community_health and admins; subscribe to `reminders` for a live log screen.
+
+| Kind | Sent when | Staff notification |
+|---|---|---|
+| `appointment` | Appointment is `scheduled`/`confirmed` and starts within 24 hours. One per appointment. | Assigned doctor: "Upcoming appointment" |
+| `medication` | Home (non-inpatient) prescription that is **dispensed**, for each dose time from dispensing to the end of the course. Needs `duration_days` and a known frequency: OD (08:00), BD (08:00, 20:00), TDS (08:00, 14:00, 20:00), QDS (06:00, 12:00, 18:00, 22:00), Lagos time. Other wording (PRN, free text) gets none. A dose more than 2 hours late is skipped. | none |
+| `anc_follow_up` | The latest ANC visit has a follow-up date of tomorrow. | Clinician who recorded that visit: "Antenatal follow-up tomorrow" |
+
+| Function | Who | Behaviour |
+|---|---|---|
+| `run_reminders()` | hospital_admin, super_admin (and pg_cron / service role) | Creates whatever is due and returns `{appointments, medication, anc_follow_ups}` counts. Safe to run repeatedly: nothing is sent twice. Only the service role may pass `p_now` to set the clock (rehearsal and tests). |
+
+pg_cron runs it every 5 minutes when the extension exists. Otherwise: `node --env-file=.env scripts/run-reminders.mjs --loop` (or without `--loop` for one run before a rehearsal).
+
+`scripts/e2e-demo-flow.mjs` now has sections 14 (ANC) and 15 (reminders). The medication checks need `SUPABASE_SERVICE_ROLE_KEY` in `.env` and are skipped without it.
+
+### Concurrent dispensing
+`node --env-file=.env scripts/concurrency-dispense.mjs` (22 checks) fires real parallel `dispense_prescription` calls from separate pharmacist sessions: the same prescription dispensed by three at once, two prescriptions competing for stock that covers one, a fill split across two batches, and six prescriptions against 20 tablets. It uses its own test drug, so the Paracetamol 100 -> 90 demo number is untouched. Run `reset-demo-data.mjs` first. It was checked by temporarily removing the row locks: three simultaneous dispenses of one prescription then took stock from 100 to 70, so the test does detect the race it guards against.
+
+### Automatic expiry alerts (spec 14)
+`generate_expiry_alerts()` is scheduled daily (pg_cron job `expiry-alerts`). `expiry_alerts_sent` remembers which batch was reported at which stage (`approaching` / `expired`), so scheduling it never repeats a notice. Notification types: `expiry`, titled "Drug approaching expiry" or "Drug batch expired". Expired batches are already excluded from `drug_stock_status.quantity` and from dispensing. e2e section 16 covers it; the expired-batch checks need `SUPABASE_SERVICE_ROLE_KEY`.
