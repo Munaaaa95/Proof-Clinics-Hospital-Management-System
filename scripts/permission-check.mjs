@@ -188,6 +188,38 @@ for (const k of ['reception', 'doctor', 'nurse', 'lab', 'pharmacy', 'billing']) 
   check(`${k} cannot read the audit log`, (await sees(c[k].from('audit_log').select('id'))) === 0)
 }
 
+section('9b. Inpatient notes')
+{
+  const active = (await c.admin.from('admissions').select('id, patient_id').eq('status', 'active').limit(2)).data ?? []
+  const gone = (await c.admin.from('admissions').select('id').eq('status', 'discharged').limit(1)).data ?? []
+  const adm = active[0]
+  const other = active[1] ?? active[0]
+  check('there is an admitted patient to test with', !!adm)
+  const note = (k, type, extra = {}) => c[k].from('progress_notes').insert({ admission_id: adm.id, patient_id: adm.patient_id, note_type: type, body: 'probe', author_id: c[k].uid, ...extra })
+  for (const k of ['reception', 'lab', 'pharmacy', 'billing']) {
+    check(`${k} cannot write an inpatient note`, refused(await note(k, 'progress')))
+    check(`${k} cannot read inpatient notes`, (await sees(c[k].from('progress_notes').select('id'))) === 0)
+  }
+  check('a nurse can add a nursing note', !(await note('nurse', 'nursing')).error)
+  check('a nurse cannot write a treatment plan', refused(await note('nurse', 'treatment_plan')))
+  check('a doctor can write a treatment plan', !(await note('doctor', 'treatment_plan')).error)
+  check('a note cannot be written in someone else\'s name', refused(await note('doctor', 'progress', { author_id: c.nurse.uid })))
+  check('an empty note is refused', refused(await note('doctor', 'progress', { body: '   ' })))
+  const wrongPatient = await c.doctor.from('progress_notes').insert({ admission_id: adm.id, patient_id: other.patient_id, note_type: 'progress', body: 'patient id probe', author_id: c.doctor.uid }).select('patient_id').single()
+  check('the patient always comes from the admission', !wrongPatient.error && wrongPatient.data.patient_id === adm.patient_id, JSON.stringify(wrongPatient.error ?? wrongPatient.data))
+  if (gone[0]) check('no notes on a discharged admission', refused(await c.doctor.from('progress_notes').insert({ admission_id: gone[0].id, patient_id: adm.patient_id, note_type: 'progress', body: 'probe', author_id: c.doctor.uid })))
+  check('a note cannot be edited', await (async () => {
+    const n = (await c.doctor.from('progress_notes').select('id, body').eq('admission_id', adm.id).limit(1)).data[0]
+    await c.doctor.from('progress_notes').update({ body: 'changed' }).eq('id', n.id)
+    return (await c.admin.from('progress_notes').select('body').eq('id', n.id).single()).data.body === n.body
+  })())
+  check('a note cannot be deleted', await (async () => {
+    const before = (await c.admin.from('progress_notes').select('*', { count: 'exact', head: true })).count
+    await c.admin.from('progress_notes').delete().not('id', 'is', null)
+    return (await c.admin.from('progress_notes').select('*', { count: 'exact', head: true })).count === before
+  })())
+}
+
 section('10. Notifications are private')
 check('a doctor cannot read the nurse\'s notifications', (await sees(c.doctor.from('notifications').select('id').eq('recipient_staff_id', c.nurse.uid))) === 0)
 check('a doctor cannot mark the nurse\'s notification read', await (async () => {

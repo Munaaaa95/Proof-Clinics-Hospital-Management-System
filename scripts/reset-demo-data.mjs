@@ -91,6 +91,15 @@ const rxs = await ins('prescriptions', [
   { patient_id: P.funke, visit_id: admissionIds.funke.visit, admission_id: admissionIds.funke.admission, drug_id: drugs['Paracetamol 500mg'].id, dose: '1g', route: 'oral', frequency: 'TDS', duration_days: 3, quantity: 9, prescribed_by: doctor2 },
   { patient_id: P.emeka, visit_id: admissionIds.emeka.visit, admission_id: admissionIds.emeka.admission, drug_id: drugs['Ibuprofen 400mg'].id, dose: '400mg', route: 'oral', frequency: 'BD', duration_days: 5, quantity: 10, prescribed_by: doctor },
 ])
+// Inpatient notes (spec 8): a progress note and a nursing note each, and a treatment plan for the sickest patient
+await ins('progress_notes', [
+  { admission_id: admissionIds.chinedu.admission, patient_id: P.chinedu, note_type: 'treatment_plan', body: 'IV artesunate for 24 hours, then oral artemether/lumefantrine. Paracetamol for fever. Review parasite count daily.', author_id: doctor, created_at: ago(46) },
+  { admission_id: admissionIds.chinedu.admission, patient_id: P.chinedu, note_type: 'progress', body: 'Day 2. Fever settling, eating small meals. Parasite count falling. Continue current plan.', author_id: doctor, created_at: ago(20) },
+  { admission_id: admissionIds.chinedu.admission, patient_id: P.chinedu, note_type: 'nursing', body: 'Slept well. Temperature 37.4 at 06:00. Taking oral fluids. No vomiting overnight.', author_id: nurse, created_at: ago(8) },
+  { admission_id: admissionIds.funke.admission, patient_id: P.funke, note_type: 'progress', body: 'Day 1. Widal positive. Started on treatment. Abdominal pain improving.', author_id: doctor2, created_at: ago(10) },
+  { admission_id: admissionIds.funke.admission, patient_id: P.funke, note_type: 'nursing', body: 'Comfortable. Encouraged fluids. Bowels not open today.', author_id: nurse, created_at: ago(4) },
+  { admission_id: admissionIds.emeka.admission, patient_id: P.emeka, note_type: 'nursing', body: 'Admitted from clinic. BP 190/110 on arrival, now 168/100. Resting, call bell within reach.', author_id: nurse, created_at: ago(5) },
+])
 // One dose already given by the nurse, so the MAR shows a mix of given and pending
 const firstDose = ok(await db.from('medication_administrations').select('id').eq('prescription_id', rxs[1].id).limit(1).single(), 'mar row')
 ok(await db.from('medication_administrations').update({ status: 'given', administered_by: nurse, administered_at: ago(2) }).eq('id', firstDose.id), 'give dose')

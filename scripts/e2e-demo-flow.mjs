@@ -411,5 +411,14 @@ must(await c.admin.from('services').update({ price: Number(svc.price) + 1 }).eq(
 must(await c.admin.from('services').update({ price: svc.price }).eq('id', svc.id), 'restore price')
 check('a change to a service price is audited', ((await c.admin.from('audit_log').select('id').eq('table_name', 'services').eq('record_id', svc.id)).data ?? []).length >= 2)
 
+section('19. Inpatient notes')
+const wardPatient = (await c.admin.from('admissions').select('id, patient_id').eq('status', 'active').limit(1)).data[0]
+must(await c.doctor.from('progress_notes').insert({ admission_id: wardPatient.id, patient_id: wardPatient.patient_id, note_type: 'progress', body: 'e2e progress note' }), 'doctor note')
+must(await c.nurse.from('progress_notes').insert({ admission_id: wardPatient.id, patient_id: wardPatient.patient_id, note_type: 'nursing', body: 'e2e nursing note' }), 'nurse note')
+const notes = (await c.doctor.from('progress_notes').select('note_type, body').eq('admission_id', wardPatient.id)).data ?? []
+check('doctor and nurse notes are both on the chart', notes.some((n) => n.body === 'e2e progress note') && notes.some((n) => n.body === 'e2e nursing note'))
+check('the receptionist cannot read the notes', ((await c.reception.from('progress_notes').select('id')).data ?? []).length === 0)
+check('inpatient notes are audited', ((await c.admin.from('audit_log').select('id').eq('table_name', 'progress_notes').eq('patient_id', wardPatient.patient_id)).data ?? []).length >= 2)
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
