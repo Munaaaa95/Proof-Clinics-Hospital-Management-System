@@ -401,5 +401,15 @@ section('17. Sessions')
 for (const k of Object.keys(c)) await c[k].rpc('record_logout')
 check('logout recorded', ((await c.admin.from('staff_sessions').select('id').eq('staff_id', c.admin.uid).not('logout_at', 'is', null)).data ?? []).length > 0)
 
+section('18. Audit covers sessions, prices and reminders')
+const lateAudit = (await c.admin.from('audit_log').select('table_name,action')).data ?? []
+const lateTables = new Set(lateAudit.map((a) => a.table_name))
+check('logins and logouts are audited', lateAudit.some((a) => a.table_name === 'staff_sessions' && a.action === 'INSERT') && lateAudit.some((a) => a.table_name === 'staff_sessions' && a.action === 'UPDATE'))
+check('sent reminders are audited', lateTables.has('reminders'))
+const svc = must(await c.admin.from('services').select('id,price').eq('name', 'Malaria Parasite (MP) Test').single(), 'service price')
+must(await c.admin.from('services').update({ price: Number(svc.price) + 1 }).eq('id', svc.id), 'change price')
+must(await c.admin.from('services').update({ price: svc.price }).eq('id', svc.id), 'restore price')
+check('a change to a service price is audited', ((await c.admin.from('audit_log').select('id').eq('table_name', 'services').eq('record_id', svc.id)).data ?? []).length >= 2)
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
