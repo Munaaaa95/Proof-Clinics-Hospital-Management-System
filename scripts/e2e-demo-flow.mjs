@@ -401,5 +401,24 @@ section('17. Sessions')
 for (const k of Object.keys(c)) await c[k].rpc('record_logout')
 check('logout recorded', ((await c.admin.from('staff_sessions').select('id').eq('staff_id', c.admin.uid).not('logout_at', 'is', null)).data ?? []).length > 0)
 
+section('18. Audit covers sessions, prices and reminders')
+const lateAudit = (await c.admin.from('audit_log').select('table_name,action')).data ?? []
+const lateTables = new Set(lateAudit.map((a) => a.table_name))
+check('logins and logouts are audited', lateAudit.some((a) => a.table_name === 'staff_sessions' && a.action === 'INSERT') && lateAudit.some((a) => a.table_name === 'staff_sessions' && a.action === 'UPDATE'))
+check('sent reminders are audited', lateTables.has('reminders'))
+const svc = must(await c.admin.from('services').select('id,price').eq('name', 'Malaria Parasite (MP) Test').single(), 'service price')
+must(await c.admin.from('services').update({ price: Number(svc.price) + 1 }).eq('id', svc.id), 'change price')
+must(await c.admin.from('services').update({ price: svc.price }).eq('id', svc.id), 'restore price')
+check('a change to a service price is audited', ((await c.admin.from('audit_log').select('id').eq('table_name', 'services').eq('record_id', svc.id)).data ?? []).length >= 2)
+
+section('19. Inpatient notes')
+const wardPatient = (await c.admin.from('admissions').select('id, patient_id').eq('status', 'active').limit(1)).data[0]
+must(await c.doctor.from('progress_notes').insert({ admission_id: wardPatient.id, patient_id: wardPatient.patient_id, note_type: 'progress', body: 'e2e progress note' }), 'doctor note')
+must(await c.nurse.from('progress_notes').insert({ admission_id: wardPatient.id, patient_id: wardPatient.patient_id, note_type: 'nursing', body: 'e2e nursing note' }), 'nurse note')
+const notes = (await c.doctor.from('progress_notes').select('note_type, body').eq('admission_id', wardPatient.id)).data ?? []
+check('doctor and nurse notes are both on the chart', notes.some((n) => n.body === 'e2e progress note') && notes.some((n) => n.body === 'e2e nursing note'))
+check('the receptionist cannot read the notes', ((await c.reception.from('progress_notes').select('id')).data ?? []).length === 0)
+check('inpatient notes are audited', ((await c.admin.from('audit_log').select('id').eq('table_name', 'progress_notes').eq('patient_id', wardPatient.patient_id)).data ?? []).length >= 2)
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

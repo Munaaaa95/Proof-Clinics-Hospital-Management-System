@@ -4,3 +4,8 @@ node_modules
 .next
 .DS_Store
 supabase/.temp
+.next-test
+.env.*
+!.env.example
+*.tsbuildinfo
+next-env.d.ts

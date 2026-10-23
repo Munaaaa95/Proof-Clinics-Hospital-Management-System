@@ -111,8 +111,9 @@ New booking: when an appointment is inserted with a `doctor_id`, that doctor get
 
 ### Scripts
 - `node --env-file=.env scripts/reset-demo-data.mjs`: wipes activity, restocks drugs (Paracetamol = 100), frees beds, seeds 12 fake patients across every dashboard state (Michael Nelson is deliberately not seeded). Run before every rehearsal.
-- `node --env-file=.env scripts/e2e-demo-flow.mjs`: 92 end-to-end checks. Run after a reset.
+- `node --env-file=.env scripts/e2e-demo-flow.mjs`: 147 end-to-end checks. Run after a reset.
 - `node --env-file=.env scripts/realtime-check.mjs`: 11 live cross-session checks.
+- `node --env-file=.env scripts/permission-check.mjs`: 114 role-boundary checks (see Permission review below).
 
 ## 8. Added in the third backend pass (ANC wrapper and reminder scheduler)
 
@@ -148,3 +149,31 @@ pg_cron runs it every 5 minutes when the extension exists. Otherwise: `node --en
 
 ### Automatic expiry alerts (spec 14)
 `generate_expiry_alerts()` is scheduled daily (pg_cron job `expiry-alerts`). `expiry_alerts_sent` remembers which batch was reported at which stage (`approaching` / `expired`), so scheduling it never repeats a notice. Notification types: `expiry`, titled "Drug approaching expiry" or "Drug batch expired". Expired batches are already excluded from `drug_stock_status.quantity` and from dispensing. e2e section 16 covers it; the expired-batch checks need `SUPABASE_SERVICE_ROLE_KEY`.
+
+### Audit coverage (spec 27)
+Every table that holds patient, clinical, stock, billing or staff data writes to `audit_log`, including `wards`, `services` (price changes), `staff_sessions` (logins and logouts) and `reminders`. `notifications` and `expiry_alerts_sent` are not audited on purpose: they are by-products of events that already are. e2e section 18 covers it.
+
+### Permission review
+`node --env-file=.env scripts/permission-check.mjs` (114 checks, run after a reset) logs in as each role and tries what that role must not be able to do: write a diagnosis, prescribe, dispense, skip the lab or queue steps, read billing or the audit log, delete anything, promote itself, or act while signed out. It found three holes that row-level security alone cannot close (it controls who may write, not which values), now fixed by guard triggers:
+- A doctor could insert a prescription already `dispensed`. New prescriptions must be `prescribed`, and a doctor can only change that to `cancelled`.
+- A doctor could insert a lab request already `finalized`. New lab requests always start as `requested`.
+- A receptionist or nurse could set a visit's disposition or mark it `completed` (skipping the consultation fee). They can now only cancel a visit; start and complete go through the doctor's functions.
+
+Known and accepted for the demo: a doctor may edit a prescription's dose or quantity before it is dispensed (audited); admins can edit any staff role.
+
+### Review of `dispense_prescription`
+Reviewed by the project owner (no second backend developer available). Row locks are taken in a fixed order (prescription, then batches by expiry) so concurrent dispenses queue instead of deadlocking; a short fill rolls the whole call back; expired batches are skipped; stock, ledger, dispensing rows, bill item and low-stock alert are written in one transaction. `concurrency-dispense.mjs` (22 checks) exercises the race. Limits left as they are: expiry is compared with the database date (UTC, so up to an hour off Lagos midnight), and the low-stock alert repeats on every dispense while stock stays at or below the minimum.
+
+### Inpatient notes (spec 8)
+(admission_id, patient_id, note_type , body, author_id, created_at). Read with , write with .
+- **Who:** doctor and nurse read; doctor writes any type; a nurse writes nursing and progress notes only (a treatment plan is the doctor's). Admins read.
+- **Append-only:** no update or delete, so a correction is a new note. Every note is audited with its author.
+- **Rules in the database:**  always comes from the admission, an empty note is refused, and notes can only be added while the admission is active.
+- Realtime: subscribe to . The demo reset seeds a few notes for the three inpatients.
+
+### Inpatient notes (spec 8)
+`progress_notes`(admission_id, patient_id, note_type `progress|nursing|treatment_plan`, body, author_id, created_at). Read with `.from('progress_notes').select(...)`, write with `.insert({ admission_id, note_type, body, author_id })`.
+- **Who:** doctor and nurse read; a doctor writes any type; a nurse writes nursing and progress notes only (a treatment plan is the doctor's). Admins read.
+- **Append-only:** no update or delete, so a correction is a new note. Every note is audited with its author.
+- **Rules in the database:** `patient_id` always comes from the admission, an empty note is refused, and notes can only be added while the admission is active.
+- Realtime: subscribe to `progress_notes`. The demo reset seeds a few notes for the three inpatients.
