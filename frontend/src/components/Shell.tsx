@@ -47,10 +47,6 @@ function Sidebar() {
           ))}
         </nav>
       </div>
-      <div className="px-5 py-3 border-t border-outline-variant/70 text-label-xs text-outline">
-        <div className="font-medium text-on-surface-variant">Demo build</div>
-        <div>Fake data only</div>
-      </div>
     </aside>
   )
 }

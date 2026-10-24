@@ -39,9 +39,7 @@ export function DischargeDocument({ adm, rx, followUp, printedBy }: DocData & { 
             <div className="text-[10.5px] uppercase tracking-[0.14em] text-outline mt-0.5">Hospital Management System</div>
           </div>
           <div className="text-right">
-            <h1 className="text-[18px] font-semibold tracking-tight">Discharge Summary</h1>
-            <div className="text-label-xs text-outline mt-1">Student prototype. Fake patient data.</div>
-          </div>
+            <h1 className="text-[18px] font-semibold tracking-tight">Discharge Summary</h1>          </div>
         </header>
 
         <section className="mt-6">

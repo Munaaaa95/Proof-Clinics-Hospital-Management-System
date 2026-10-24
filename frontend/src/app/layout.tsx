@@ -4,7 +4,7 @@ import { AuthProvider } from '@/lib/auth'
 
 export const metadata: Metadata = {
   title: 'Proof Clinics HMS',
-  description: 'Student prototype. Fake patient data only.',
+  description: 'Hospital Management System for Proof Clinics.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -39,7 +39,7 @@ export default function LoginPage() {
             <div><dt className="font-medium text-on-primary">Every step is accounted for</dt><dd>Each change is written to an audit trail with who made it and when.</dd></div>
           </dl>
         </div>
-        <p className="text-[12px] text-on-primary/65">Student prototype. Fake patient data only.</p>
+        <div aria-hidden="true" />
       </section>
 
       <section className="flex items-center justify-center px-6 py-12">
@@ -73,8 +73,6 @@ export default function LoginPage() {
               {busy ? <Spinner className="h-4 w-4" /> : 'Sign in'}
             </button>
           </form>
-
-          <p className="mt-8 text-label-xs text-outline leading-relaxed">Student prototype, not production software. Do not enter real patient records.</p>
         </div>
       </section>
     </main>

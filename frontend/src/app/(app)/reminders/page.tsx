@@ -72,7 +72,7 @@ export default function RemindersPage() {
                   <Td><Pill tone={KIND[r.kind].tone}>{KIND[r.kind].label}</Pill></Td>
                   <Td className="max-w-md">{r.message}</Td>
                   <Td className="whitespace-nowrap">{fmtDateTime(r.due_at)}</Td>
-                  <Td>{r.channel === 'log' ? 'Log (demo)' : r.channel}</Td>
+                  <Td>{r.channel === 'log' ? 'Log' : r.channel}</Td>
                 </Tr>
               ))}
             </Table>

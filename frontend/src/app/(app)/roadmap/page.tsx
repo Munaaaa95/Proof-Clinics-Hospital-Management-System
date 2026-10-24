@@ -36,7 +36,7 @@ const NEXT: { title: string; note: string; items: { name: string; spec: string; 
     note: 'Everything patient-facing, using the same secure backend.',
     items: [
       { name: 'Patient portal and mobile app', spec: '24', detail: 'Each patient sees only their own records, appointments and bills.' },
-      { name: 'SMS and WhatsApp delivery', spec: '12, 25', detail: 'Reminders are logged in this demo; real channels come later.' },
+      { name: 'SMS and WhatsApp delivery', spec: '12, 25', detail: 'Reminders are logged for now; real channels come later.' },
       { name: 'Configurable notifications', spec: '25', detail: 'Choose which events notify which roles.' },
     ],
   },
@@ -55,10 +55,10 @@ const NEXT: { title: string; note: string; items: { name: string; spec: string; 
 export default function RoadmapPage() {
   return (
     <>
-      <PageHeader title="Roadmap" subtitle="What this demo covers, and what comes after it. Section numbers refer to the Product and Functional Specification." />
+      <PageHeader title="Roadmap" subtitle="What is built today, and what comes after it. Section numbers refer to the Product and Functional Specification." />
 
       <Card className="p-6">
-        <h2 className="text-headline-md mb-4">Built for this demo</h2>
+        <h2 className="text-headline-md mb-4">Built today</h2>
         <ul className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-3">
           {BUILT.map(([name, spec]) => (
             <li key={name} className="flex items-baseline justify-between gap-3 border-b border-outline-variant/40 pb-2 text-body-md">
@@ -85,7 +85,7 @@ export default function RoadmapPage() {
         ))}
       </div>
 
-      <p className="text-label-xs text-outline">Student prototype on fake data. Hospital feedback after this demo decides the order of the next phases.</p>
+      <p className="text-label-xs text-outline">Hospital feedback decides the order of the next phases.</p>
     </>
   )
 }
