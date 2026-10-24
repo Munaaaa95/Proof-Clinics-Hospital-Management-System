@@ -21,7 +21,11 @@ export const useAuth = () => {
   return v
 }
 
-const STAFF_COLS = 'id, full_name, role, department, position, active'
+// Last-activity timestamp shared across tabs; the idle sign-out in Shell reads it.
+export const ACTIVITY_KEY = 'hms:last-activity'
+const clearActivity = () => { try { localStorage.removeItem(ACTIVITY_KEY) } catch { /* storage unavailable */ } }
+
+const STAFF_COLS ='id, full_name, role, department, position, active'
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
@@ -60,6 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await supabase.auth.signOut()
       return 'This account is not an active staff account.'
     }
+    clearActivity()
     setSession(data.session)
     setStaff(row as Staff)
     await supabase.rpc('record_login')
@@ -69,6 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     await supabase.rpc('record_logout')
     await supabase.auth.signOut()
+    clearActivity()
     setStaff(null)
   }, [])
 

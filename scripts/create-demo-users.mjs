@@ -1,4 +1,4 @@
-// Creates the demo staff accounts (fake people) in Supabase Auth and the staff table. Safe to re-run.
+// Creates the demo staff accounts (fake people) in Supabase Auth and the staff table. Safe to re-run; existing accounts get the current DEMO_PASSWORD.
 // Usage: node --env-file=.env scripts/create-demo-users.mjs
 import { createClient } from '@supabase/supabase-js'
 
@@ -37,6 +37,9 @@ for (const p of people) {
     })
     if (error) throw error
     user = data.user
+  } else {
+    const { error } = await admin.auth.admin.updateUserById(user.id, { password, email_confirm: true })
+    if (error) throw error
   }
   const { error } = await admin.from('staff').upsert({
     id: user.id, staff_code: p.code, full_name: p.name, role: p.role,

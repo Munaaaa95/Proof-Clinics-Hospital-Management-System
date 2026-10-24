@@ -17,7 +17,6 @@ export interface NavItem { path: string; label: string; group: string; roles: 'a
 const A: StaffRole[] = ['super_admin', 'hospital_admin']
 export const NAV: NavItem[] = [
   { path: '/dashboard', label: 'Dashboard', group: 'Overview', roles: 'all' },
-  { path: '/roadmap', label: 'Roadmap', group: 'Overview', roles: 'all' },
   { path: '/registration', label: 'Registration', group: 'Front desk', roles: ['receptionist', 'doctor', 'nurse', ...A] },
   { path: '/queue', label: 'Queue', group: 'Front desk', roles: ['receptionist', 'doctor', 'nurse', ...A] },
   { path: '/appointments', label: 'Appointments', group: 'Front desk', roles: ['receptionist', 'doctor', 'nurse', ...A] },
