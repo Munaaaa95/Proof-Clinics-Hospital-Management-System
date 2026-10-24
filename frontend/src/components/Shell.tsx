@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
-import { useAuth } from '@/lib/auth'
+import { ACTIVITY_KEY, useAuth } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
 import { useQuery } from '@/lib/hooks'
 import { NAV, ROLE_LABEL, canSee } from '@/lib/roles'
@@ -111,6 +111,73 @@ function TopBar() {
   )
 }
 
+const IDLE_MS = 15 * 60 * 1000
+const WARN_MS = 60 * 1000
+const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'] as const
+
+// Signs the person out after 15 minutes without activity, with a one-minute warning first.
+// Activity is shared across tabs through localStorage, so a second open tab does not keep a stale session alive.
+function IdleSignOut() {
+  const router = useRouter()
+  const { signOut } = useAuth()
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null)
+  const lastRef = useRef(0)
+  const warningRef = useRef(false)
+
+  useEffect(() => {
+    const stored = () => { try { return Number(localStorage.getItem(ACTIVITY_KEY)) || 0 } catch { return 0 } }
+    const touch = () => {
+      const now = Date.now()
+      if (now - lastRef.current < 1000) return
+      lastRef.current = now
+      try { localStorage.setItem(ACTIVITY_KEY, String(now)) } catch { /* storage unavailable */ }
+    }
+    lastRef.current = stored() || Date.now()
+    touch()
+
+    let done = false
+    const leave = async () => {
+      if (done) return
+      done = true
+      await signOut()
+      router.replace('/login')
+    }
+    const onActivity = () => { if (!warningRef.current) touch() }
+    ACTIVITY_EVENTS.forEach((e) => window.addEventListener(e, onActivity, { passive: true }))
+
+    const tick = () => {
+      const idle = Date.now() - Math.max(lastRef.current, stored())
+      if (idle >= IDLE_MS) { void leave(); return }
+      warningRef.current = idle >= IDLE_MS - WARN_MS
+      setSecondsLeft(warningRef.current ? Math.ceil((IDLE_MS - idle) / 1000) : null)
+    }
+    tick()
+    const timer = setInterval(tick, 1000)
+    return () => {
+      clearInterval(timer)
+      ACTIVITY_EVENTS.forEach((e) => window.removeEventListener(e, onActivity))
+    }
+  }, [signOut, router])
+
+  if (secondsLeft === null) return null
+  return (
+    <div role="alertdialog" aria-modal="true" aria-label="Session about to expire"
+      className="print:hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-sm bg-surface-container-lowest rounded-lg shadow-lg border border-outline-variant/60 p-6 flex flex-col gap-3">
+        <h2 className="text-headline-md">Still there?</h2>
+        <p className="text-body-sm text-on-surface-variant">
+          You will be signed out in {secondsLeft} second{secondsLeft === 1 ? '' : 's'} because there has been no activity.
+        </p>
+        <button type="button" autoFocus
+          onClick={() => { warningRef.current = false; lastRef.current = 0; setSecondsLeft(null); window.dispatchEvent(new Event('mousedown')) }}
+          className="self-end px-4 py-2 rounded-lg bg-primary text-on-primary text-body-md-medium">
+          Stay signed in
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // Paths every signed-in member of staff may open (they are reached from search, the bell and bed cards, not the menu).
 const OPEN_PATHS = ['/notifications', '/search', '/patients', '/discharge']
 
@@ -131,6 +198,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <ToastProvider>
+      <IdleSignOut />
       <Sidebar />
       <div className="pl-60 print:pl-0 min-h-screen flex flex-col bg-background print:bg-white">
         <TopBar />

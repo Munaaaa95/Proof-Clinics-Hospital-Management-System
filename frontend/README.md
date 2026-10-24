@@ -40,11 +40,11 @@ registration with the duplicate alert, queue, appointments, consultation, labora
 medication record, discharge, billing, audit log, patient profile, notifications, search, reports and antenatal care.
 Also built from the spec: the reminder log (spec 12, 25), patient feedback on completed visits (3B), vital signs at registration or
 from the queue by a nurse or receptionist (5, 11), Available Beds and Drug Stock sections on the dashboard (3G, 3H), stock
-history per drug in the pharmacy (14), and a Roadmap page for demo step 9.
+history per drug in the pharmacy (14).
 
 | Route | Who sees it in the menu |
 |---|---|
-| `/dashboard`, `/roadmap` | everyone |
+| `/dashboard` | everyone |
 | `/registration`, `/queue`, `/appointments` | receptionist, doctor, nurse, admin |
 | `/reminders` | receptionist, doctor, nurse, community health, admin (only admins can run the scheduler) |
 | `/consultation` | doctor, admin |
